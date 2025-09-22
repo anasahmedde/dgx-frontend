@@ -1,5 +1,6 @@
-import React, { useEffect, useState } from "react";
-import { insertVideo, listVideos, updateVideo, deleteVideo } from "../api/video";
+// src/components/Video.js
+import React, { useEffect, useState, useRef } from "react";
+import { insertVideo, listVideos, updateVideo, deleteVideo, uploadVideo } from "../api/video";
 
 function Modal({ open, title, onClose, children, footer }) {
   useEffect(() => {
@@ -31,12 +32,25 @@ function Modal({ open, title, onClose, children, footer }) {
 }
 
 export default function Video() {
+  // list/search
   const [items, setItems] = useState([]);
   const [q, setQ] = useState("");
+
+  // insert (manual link) – keeping for parity with your old UI
   const [videoName, setVideoName] = useState("");
   const [s3Link, setS3Link] = useState("");
 
-  const [edit, setEdit] = useState(null); // { video_name, s3_link, newName, newLink }
+  // edit modal
+  const [edit, setEdit] = useState(null);
+
+  // --- NEW: upload from browser ---
+  const [uploadName, setUploadName] = useState("");
+  const [uploadFile, setUploadFile] = useState(null);
+  const [overwrite, setOverwrite] = useState(true);
+  const [pct, setPct] = useState(0);
+  const [uploading, setUploading] = useState(false);
+  const [uploadedInfo, setUploadedInfo] = useState(null); // { s3_link, key, bucket }
+  const fileInputRef = useRef(null);
 
   useEffect(() => {
     load();
@@ -77,11 +91,48 @@ export default function Video() {
     load();
   };
 
+  // --- Upload handler ---
+  const handleUpload = async () => {
+    if (!uploadName.trim()) {
+      alert("Please enter a video name");
+      return;
+    }
+    if (!uploadFile) {
+      alert("Please select a file");
+      return;
+    }
+    setUploadedInfo(null);
+    setPct(0);
+    setUploading(true);
+    try {
+      const res = await uploadVideo(
+        uploadFile,
+        uploadName.trim(),
+        overwrite,
+        (progressPct) => setPct(progressPct)
+      );
+      setUploadedInfo(res.data); // contains s3_link, key, bucket, etc.
+      // Refresh list to show new/updated row
+      load();
+      // Clear file input nicely
+      setUploadFile(null);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    } catch (e) {
+      console.error(e);
+      alert(e?.response?.data?.detail || "Upload failed");
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  // styles
   const input = { border: "1px solid #e5e7eb", borderRadius: 8, padding: "8px 10px", fontSize: 14 };
   const btn = { padding: "8px 12px", borderRadius: 8, border: "1px solid #e5e7eb", background: "#fff", cursor: "pointer", fontSize: 14, fontWeight: 600 };
   const btnPrimary = { ...btn, background: "#4f46e5", color: "#fff", borderColor: "#4f46e5" };
   const btnDanger = { ...btn, background: "#dc2626", color: "#fff", borderColor: "#dc2626" };
   const row = { display: "grid", gridTemplateColumns: "1fr auto auto", gap: 8, alignItems: "center", padding: "8px 0", borderBottom: "1px dashed #eee" };
+  const barWrap = { width: "100%", height: 10, background: "#eef2ff", borderRadius: 9999, overflow: "hidden" };
+  const bar = { height: "100%", width: `${pct}%`, background: "#4f46e5", transition: "width .2s" };
 
   const filtered = items.filter((it) => !q || it.video_name.toLowerCase().includes(q.toLowerCase()));
 
@@ -89,20 +140,62 @@ export default function Video() {
     <div>
       <h2 style={{ fontSize: 28, margin: "0 0 12px" }}>Videos</h2>
 
-      {/* Search */}
+      {/* ===== NEW: Upload from browser ===== */}
+      <div style={{ border: "1px solid #e5e7eb", borderRadius: 12, padding: 16, marginBottom: 16 }}>
+        <h3 style={{ marginTop: 0, marginBottom: 10 }}>Upload a Video</h3>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 8 }}>
+          <input
+            style={input}
+            placeholder="video_name (saved as video_name.mp4)"
+            value={uploadName}
+            onChange={(e) => setUploadName(e.target.value)}
+          />
+          <input
+            ref={fileInputRef}
+            style={input}
+            type="file"
+            accept="video/mp4,video/*"
+            onChange={(e) => setUploadFile(e.target.files?.[0] || null)}
+          />
+          <button style={btnPrimary} disabled={uploading} onClick={handleUpload}>
+            {uploading ? "Uploading..." : "Upload"}
+          </button>
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 10 }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14 }}>
+            <input type="checkbox" checked={overwrite} onChange={(e) => setOverwrite(e.target.checked)} />
+            Overwrite if exists
+          </label>
+          {uploading && (
+            <div style={{ flex: 1 }}>
+              <div style={barWrap}><div style={bar} /></div>
+              <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>{pct}%</div>
+            </div>
+          )}
+        </div>
+
+        {uploadedInfo && (
+          <div style={{ marginTop: 10, fontSize: 14 }}>
+            <div><strong>Bucket:</strong> {uploadedInfo.bucket}</div>
+            <div style={{ wordBreak: "break-all" }}>
+              <strong>Key:</strong> {uploadedInfo.key}
+            </div>
+            <div style={{ wordBreak: "break-all", color: "#2563eb" }}>
+              <strong>S3 URI:</strong> {uploadedInfo.s3_link}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* ===== Search ===== */}
       <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
         <input style={{ ...input, minWidth: 220 }} placeholder="search (q)" value={q} onChange={(e) => setQ(e.target.value)} />
         <button style={btn} onClick={load}>Search</button>
       </div>
 
-      {/* Add new */}
-      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-        <input style={{ ...input, minWidth: 200 }} placeholder="video_name" value={videoName} onChange={(e) => setVideoName(e.target.value)} />
-        <input style={{ ...input, minWidth: 260 }} placeholder="s3_link (s3://bucket/key.mp4)" value={s3Link} onChange={(e) => setS3Link(e.target.value)} />
-        <button style={btnPrimary} onClick={add}>Add Video</button>
-      </div>
 
-      {/* List */}
+      {/* ===== List ===== */}
       <div style={{ border: "1px solid #eee", borderRadius: 12, padding: "4px 12px" }}>
         <div style={{ ...row, fontWeight: 700, borderBottom: "1px solid #eee", paddingTop: 10, paddingBottom: 10 }}>
           <div>Video (ID) — Link</div>
@@ -123,7 +216,7 @@ export default function Video() {
         ))}
       </div>
 
-      {/* Edit modal */}
+      {/* ===== Edit modal ===== */}
       <Modal
         open={!!edit}
         title="Update Video"
@@ -146,7 +239,7 @@ export default function Video() {
               style={{ ...input }}
               value={edit.newName}
               onChange={(e) => setEdit((x) => ({ ...x, newName: e.target.value }))}
-              placeholder="e.g. summer_sale_01"
+              placeholder="e.g. nazmabad_video"
             />
 
             <label style={{ fontSize: 12, color: "#6b7280", marginTop: 6 }}>New s3_link</label>
@@ -162,3 +255,4 @@ export default function Video() {
     </div>
   );
 }
+
