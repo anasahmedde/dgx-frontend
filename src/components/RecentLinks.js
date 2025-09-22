@@ -1,128 +1,183 @@
 // src/components/RecentLinks.js
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { listLinks, deleteLink } from "../api/link";
 
 export default function RecentLinks({ refreshKey = 0 }) {
-  const [items, setItems] = useState([]);
+  const [links, setLinks] = useState([]);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
+  const [lastLoadedAt, setLastLoadedAt] = useState(null);
 
-  const load = async () => {
-    setBusy(true);
-    setMsg("");
-    try {
-      // backend caps are le=100; keep under that to avoid 422
-      const res = await listLinks({ limit: 100, offset: 0 });
-      setItems(res.data.items || []);
-    } catch (e) {
-      setMsg(`Load failed: ${e?.response?.data?.detail || e.message}`);
-    } finally {
-      setBusy(false);
-    }
-  };
+  // search boxes
+  const [search, setSearch] = useState({
+    mobile_id: "",
+    gname: "",
+    shop_name: "",
+    video_name: "",
+  });
 
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshKey]);
 
-  const remove = async (id) => {
-    if (!window.confirm("Delete this link?")) return;
+  const extractError = (e) => {
+    const d = e?.response?.data?.detail;
+    if (Array.isArray(d)) return d.map((x) => x?.msg || JSON.stringify(x)).join("; ");
+    if (typeof d === "string") return d;
+    return e?.message || "Request failed";
+  };
+
+  // Try high limits, fall back if the API validates with a lower max (422)
+  const fetchWithLimitFallback = async () => {
+    for (const cap of [200, 100, 50]) {
+      try {
+        const r = await listLinks({ limit: cap, offset: 0 });
+        return r.data.items || [];
+      } catch (e) {
+        if (e?.response?.status !== 422) throw e; // only fall back on 422 validation errors
+      }
+    }
+    // final attempt with API defaults
+    const r = await listLinks({});
+    return r.data.items || [];
+  };
+
+  const load = async () => {
     setBusy(true);
+    setMsg("");
     try {
-      await deleteLink(id);
-      setItems((x) => x.filter((r) => r.id !== id));
+      const items = await fetchWithLimitFallback();
+      setLinks(items);
+      setLastLoadedAt(new Date());
     } catch (e) {
-      setMsg(`Delete failed: ${e?.response?.data?.detail || e.message}`);
+      setMsg(`Failed to load: ${extractError(e)}`);
+      setLinks([]); // clean empty state
     } finally {
       setBusy(false);
     }
   };
 
-  // styles
-  const card = {
-    background: "#fff",
-    border: "1px solid #eee",
-    borderRadius: 12,
-    padding: 16,
-    boxShadow: "0 8px 24px rgba(0,0,0,.06)",
-  };
-  const h = { margin: 0, fontSize: 18 };
-  const table = { width: "100%", borderCollapse: "collapse" };
-  const th = { textAlign: "left", padding: "10px 8px", borderBottom: "1px solid #eee", fontWeight: 700 };
-  const td = { padding: "12px 8px", borderBottom: "1px dashed #eee", verticalAlign: "top" };
-  const btn = {
-    padding: "6px 12px",
-    borderRadius: 8,
-    border: "1px solid #ef4444",
-    background: "#ef4444",
-    color: "#fff",
-    cursor: "pointer",
-    fontSize: 13,
-    fontWeight: 700,
-  };
-  const headerRow = {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: 10,
-  };
-  const reloadBtn = {
-    padding: "6px 10px",
-    borderRadius: 8,
-    border: "1px solid #e5e7eb",
-    background: "#fff",
-    cursor: "pointer",
-    fontWeight: 600,
+  const remove = async (id) => {
+    if (!window.confirm("Delete this link?")) return;
+    setBusy(true);
+    try {
+      await deleteLink(id);
+      setLinks((xs) => xs.filter((r) => r.id !== id));
+    } catch (e) {
+      setMsg(`Delete failed: ${extractError(e)}`);
+    } finally {
+      setBusy(false);
+    }
   };
 
+  // client-side filtering
+  const ci = (a = "", b = "") => String(a).toLowerCase().includes(String(b).toLowerCase());
+  const filtered = useMemo(() => {
+    const f = search;
+    return (links || []).filter(
+      (row) =>
+        (!f.mobile_id || ci(row.mobile_id, f.mobile_id)) &&
+        (!f.gname || ci(row.gname, f.gname)) &&
+        (!f.shop_name || ci(row.shop_name, f.shop_name)) &&
+        (!f.video_name || ci(row.video_name, f.video_name))
+    );
+  }, [links, search]);
+
+  // styles
+  const input = { border: "1px solid #e5e7eb", borderRadius: 8, padding: "8px 10px", fontSize: 14 };
+  const btn = { padding: "8px 12px", borderRadius: 8, border: "1px solid #e5e7eb", background: "#fff", cursor: "pointer", fontSize: 14, fontWeight: 600 };
+  const btnPrimary = { ...btn, background: "#4f46e5", color: "#fff", borderColor: "#4f46e5" };
+  const btnDanger = { ...btn, background: "#dc2626", color: "#fff", borderColor: "#dc2626" };
+  const row = { display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr auto", gap: 8, alignItems: "center", padding: "8px 0", borderBottom: "1px dashed #eee" };
+
   return (
-    <div style={card}>
-      <div style={headerRow}>
-        <h3 style={h}>Recent Links</h3>
-        <button style={reloadBtn} onClick={load} disabled={busy}>
-          {busy ? "Loading…" : "Reload"}
+    <div>
+      {/* Header + Reload */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <h2 style={{ margin: "16px 0 8px" }}>Recent Links</h2>
+        <button
+          style={btnPrimary}
+          onClick={load}
+          disabled={busy}
+          title="Reload recent links"
+          aria-label="Reload recent links"
+        >
+          {busy ? "Reloading…" : "Reload"}
+        </button>
+        {lastLoadedAt && (
+          <span style={{ fontSize: 12, color: "#6b7280" }}>
+            Last loaded: {lastLoadedAt.toLocaleTimeString()}
+          </span>
+        )}
+        {msg && <span style={{ fontSize: 13, color: "#dc2626" }}>{msg}</span>}
+      </div>
+
+      {/* Search inputs */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr auto", gap: 8, marginBottom: 12 }}>
+        <input
+          style={input}
+          placeholder="Device (mobile_id)"
+          value={search.mobile_id}
+          onChange={(e) => setSearch((s) => ({ ...s, mobile_id: e.target.value }))}
+        />
+        <input
+          style={input}
+          placeholder="Group (gname)"
+          value={search.gname}
+          onChange={(e) => setSearch((s) => ({ ...s, gname: e.target.value }))}
+        />
+        <input
+          style={input}
+          placeholder="Shop (shop_name)"
+          value={search.shop_name}
+          onChange={(e) => setSearch((s) => ({ ...s, shop_name: e.target.value }))}
+        />
+        <input
+          style={input}
+          placeholder="Video (video_name)"
+          value={search.video_name}
+          onChange={(e) => setSearch((s) => ({ ...s, video_name: e.target.value }))}
+        />
+        <button
+          style={btn}
+          onClick={() => setSearch({ mobile_id: "", gname: "", shop_name: "", video_name: "" })}
+          title="Clear filters"
+        >
+          Clear
         </button>
       </div>
 
-      {msg && (
-        <div style={{ marginBottom: 8, color: msg.startsWith("Load failed") || msg.startsWith("Delete failed") ? "#dc2626" : "#16a34a" }}>
-          {msg}
-        </div>
-      )}
+      <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 6 }}>
+        Showing {filtered.length} of {links.length}
+      </div>
 
-      <div style={{ overflowX: "auto" }}>
-        <table style={table}>
-          <thead>
-            <tr>
-              <th style={th}>Device</th>
-              <th style={th}>Group</th>
-              <th style={th}>Shop</th>
-              <th style={th}>Video</th>
-              <th style={th}>Delete</th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((l) => (
-              <tr key={l.id}>
-                <td style={td}>{l.mobile_id}</td>
-                <td style={td}>{l.gname}</td>
-                <td style={td}>{l.shop_name}</td>
-                <td style={td}>{l.video_name}</td>
-                <td style={td}>
-                  <button style={btn} onClick={() => remove(l.id)} disabled={busy}>
-                    Delete
-                  </button>
-                </td>
-              </tr>
-            ))}
-            {items.length === 0 && !busy && (
-              <tr>
-                <td style={td} colSpan={5}>&mdash; No links yet &mdash;</td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+      <div style={{ border: "1px solid #eee", borderRadius: 12, padding: "4px 12px" }}>
+        <div style={{ ...row, fontWeight: 700, borderBottom: "1px solid #eee", paddingTop: 10, paddingBottom: 10 }}>
+          <div>Device</div>
+          <div>Group</div>
+          <div>Shop</div>
+          <div>Video</div>
+          <div>Delete</div>
+        </div>
+
+        {filtered.map((l) => (
+          <div key={l.id} style={row}>
+            <div>{l.mobile_id}</div>
+            <div>{l.gname}</div>
+            <div>{l.shop_name}</div>
+            <div>{l.video_name}</div>
+            <div>
+              <button style={btnDanger} onClick={() => remove(l.id)} disabled={busy}>
+                Delete
+              </button>
+            </div>
+          </div>
+        ))}
+
+        {filtered.length === 0 && (
+          <div style={{ padding: "10px 0", color: "#6b7280" }}>{busy ? "Loading…" : "No matches."}</div>
+        )}
       </div>
     </div>
   );
