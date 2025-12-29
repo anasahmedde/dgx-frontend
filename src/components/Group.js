@@ -1,53 +1,163 @@
+// src/components/Group.js - Enhanced Modern UI
 import React, { useEffect, useState } from "react";
 import { insertGroup, listGroups, updateGroup, deleteGroup } from "../api/group";
 
-/* Minimal modal (no deps). Hooks are always called; we show/hide via CSS. */
+/* ======================== Styles ======================== */
+const styles = {
+  input: {
+    padding: "12px 16px",
+    borderRadius: 10,
+    border: "2px solid #e5e7eb",
+    fontSize: 14,
+    outline: "none",
+    width: "100%",
+    transition: "border-color 0.2s, box-shadow 0.2s",
+  },
+  btn: {
+    padding: "12px 20px",
+    borderRadius: 10,
+    border: "none",
+    background: "#f1f5f9",
+    color: "#475569",
+    cursor: "pointer",
+    fontSize: 14,
+    fontWeight: 600,
+    transition: "all 0.2s",
+  },
+  btnPrimary: {
+    padding: "12px 20px",
+    borderRadius: 10,
+    border: "none",
+    background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+    color: "#fff",
+    cursor: "pointer",
+    fontSize: 14,
+    fontWeight: 600,
+    boxShadow: "0 2px 8px rgba(102, 126, 234, 0.3)",
+    transition: "all 0.2s",
+  },
+  btnDanger: {
+    padding: "8px 14px",
+    borderRadius: 8,
+    border: "none",
+    background: "#fee2e2",
+    color: "#dc2626",
+    cursor: "pointer",
+    fontSize: 13,
+    fontWeight: 600,
+    transition: "all 0.2s",
+  },
+};
+
+/* ======================== Modal ======================== */
 function Modal({ open, title, onClose, children, footer }) {
-  React.useEffect(() => {
+  useEffect(() => {
     if (!open) return;
     const onKey = (e) => e.key === "Escape" && onClose();
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [open, onClose]);
 
-  const overlay = { position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", display: open ? "grid" : "none", placeItems: "center", zIndex: 2000 };
-  const card = { width: "min(92vw, 560px)", background: "#fff", borderRadius: 14, boxShadow: "0 20px 50px rgba(0,0,0,.2)", overflow: "hidden" };
-  const header = { padding: "12px 16px", borderBottom: "1px solid #eee", display: "flex", alignItems: "center", justifyContent: "space-between", fontWeight: 600 };
-  const body = { padding: 16 };
-  const footerBox = { padding: 16, borderTop: "1px solid #eee", display: "flex", justifyContent: "flex-end", gap: 8 };
-  const closeBtn = { border: "1px solid #e5e7eb", background: "#fff", borderRadius: 8, padding: "6px 10px", cursor: "pointer" };
+  if (!open) return null;
 
   return (
-    <div style={overlay} onClick={onClose}>
-      <div style={card} onClick={(e) => e.stopPropagation()}>
-        <div style={header}>
-          <span>{title}</span>
-          <button style={closeBtn} onClick={onClose}>✕</button>
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(15, 23, 42, 0.6)",
+        backdropFilter: "blur(4px)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 2000,
+        padding: 20,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: "min(95vw, 480px)",
+          background: "#fff",
+          borderRadius: 20,
+          boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.25)",
+          overflow: "hidden",
+        }}
+      >
+        <div
+          style={{
+            padding: "16px 20px",
+            background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+          }}
+        >
+          <h3 style={{ margin: 0, color: "#fff", fontSize: 18, fontWeight: 600 }}>{title}</h3>
+          <button
+            onClick={onClose}
+            style={{
+              width: 32,
+              height: 32,
+              borderRadius: 8,
+              border: "none",
+              background: "rgba(255,255,255,0.2)",
+              color: "#fff",
+              fontSize: 18,
+              cursor: "pointer",
+            }}
+          >
+            ✕
+          </button>
         </div>
-        <div style={body}>{children}</div>
-        {footer && <div style={footerBox}>{footer}</div>}
+        <div style={{ padding: 20 }}>{children}</div>
+        {footer && (
+          <div
+            style={{
+              padding: "16px 20px",
+              borderTop: "1px solid #f1f5f9",
+              display: "flex",
+              justifyContent: "flex-end",
+              gap: 12,
+            }}
+          >
+            {footer}
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
+/* ======================== Main Component ======================== */
 export default function Group() {
   const [items, setItems] = useState([]);
   const [q, setQ] = useState("");
   const [gname, setGname] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [edit, setEdit] = useState(null);
 
-  const [edit, setEdit] = useState(null); // { current, newName }
-
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+  }, []);
 
   const load = async () => {
-    const res = await listGroups({ q, limit: 50, offset: 0 });
-    setItems(res.data.items || []);
+    setLoading(true);
+    try {
+      const res = await listGroups(50, 0);
+      setItems(res.items || []);
+    } catch (e) {
+      console.error("Failed to load groups:", e);
+      setItems([]);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const add = async () => {
     if (!gname.trim()) return;
-    await insertGroup(gname.trim());
+    await insertGroup({ gname: gname.trim() });
     setGname("");
     load();
   };
@@ -67,75 +177,132 @@ export default function Group() {
     load();
   };
 
-  // styles
-  const input = { border: "1px solid #e5e7eb", borderRadius: 8, padding: "8px 10px", fontSize: 14 };
-  const btn = { padding: "8px 12px", borderRadius: 8, border: "1px solid #e5e7eb", background: "#fff", cursor: "pointer", fontSize: 14, fontWeight: 600 };
-  const btnPrimary = { ...btn, background: "#4f46e5", color: "#fff", borderColor: "#4f46e5" };
-  const btnDanger = { ...btn, background: "#dc2626", color: "#fff", borderColor: "#dc2626" };
-  const row = { display: "grid", gridTemplateColumns: "1fr auto auto", gap: 8, alignItems: "center", padding: "8px 0", borderBottom: "1px dashed #eee" };
+  const filteredItems = items.filter((it) =>
+    (it.gname || "").toLowerCase().includes((q || "").toLowerCase())
+  );
 
   return (
     <div>
-      <h2 style={{ fontSize: 28, margin: "0 0 12px" }}>Groups</h2>
-
-      <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
-        <input style={{ ...input, minWidth: 220 }} placeholder="search (q)" value={q} onChange={(e) => setQ(e.target.value)} />
-        <button style={btn} onClick={load}>Search</button>
+      {/* Add New Group */}
+      <div
+        style={{
+          display: "flex",
+          gap: 12,
+          marginBottom: 24,
+          padding: 20,
+          background: "#f8fafc",
+          borderRadius: 16,
+        }}
+      >
+        <input
+          style={{ ...styles.input, flex: 1 }}
+          placeholder="Enter new group name..."
+          value={gname}
+          onChange={(e) => setGname(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && add()}
+        />
+        <button style={styles.btnPrimary} onClick={add}>
+          ➕ Add Group
+        </button>
       </div>
 
-      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-        <input style={{ ...input, minWidth: 260 }} placeholder="new group name" value={gname} onChange={(e) => setGname(e.target.value)} onKeyDown={(e) => e.key === "Enter" && add()} />
-        <button style={btnPrimary} onClick={add}>Add Group</button>
+      {/* Search */}
+      <div style={{ marginBottom: 20 }}>
+        <input
+          style={styles.input}
+          placeholder="🔍 Search groups..."
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+        />
       </div>
 
-      <div style={{ border: "1px solid #eee", borderRadius: 12, padding: "4px 12px" }}>
-        <div style={{ ...row, fontWeight: 700, borderBottom: "1px solid #eee", paddingTop: 10, paddingBottom: 10 }}>
-          <div>Name (ID)</div>
-          <div>Update</div>
-          <div>Delete</div>
-        </div>
-
-        {items.map((it) => (
-          <div key={it.id} style={row}>
-            <div>
-              <span style={{ fontWeight: 600 }}>{it.gname}</span>
-              <span style={{ color: "#6b7280", marginLeft: 8 }}>(id: {it.id})</span>
-            </div>
-            <div><button style={btn} onClick={() => openRename(it.gname)}>Update</button></div>
-            <div><button style={btnDanger} onClick={() => remove(it.gname)}>Delete</button></div>
+      {/* Groups List */}
+      <div style={{ display: "grid", gap: 12 }}>
+        {loading ? (
+          <div style={{ textAlign: "center", padding: 40, color: "#64748b" }}>
+            Loading groups...
           </div>
-        ))}
+        ) : filteredItems.length === 0 ? (
+          <div style={{ textAlign: "center", padding: 40 }}>
+            <div style={{ fontSize: 48, marginBottom: 16 }}>👥</div>
+            <div style={{ color: "#64748b" }}>No groups found</div>
+          </div>
+        ) : (
+          filteredItems.map((it) => (
+            <div
+              key={it.id}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                padding: "16px 20px",
+                background: "#fff",
+                border: "2px solid #f1f5f9",
+                borderRadius: 12,
+                transition: "all 0.2s",
+              }}
+            >
+              <div>
+                <div style={{ fontWeight: 600, fontSize: 16, color: "#1e293b" }}>
+                  {it.gname}
+                </div>
+                <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 4 }}>
+                  ID: {it.id}
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button style={styles.btn} onClick={() => openRename(it.gname)}>
+                  ✏️ Edit
+                </button>
+                <button style={styles.btnDanger} onClick={() => remove(it.gname)}>
+                  🗑️
+                </button>
+              </div>
+            </div>
+          ))
+        )}
       </div>
 
+      {/* Rename Modal */}
       <Modal
         open={!!edit}
-        title="Rename Group"
+        title="✏️ Rename Group"
         onClose={() => setEdit(null)}
         footer={
           <>
-            <button style={btn} onClick={() => setEdit(null)}>Cancel</button>
-            <button style={btnPrimary} onClick={saveRename}>Save</button>
+            <button style={styles.btn} onClick={() => setEdit(null)}>
+              Cancel
+            </button>
+            <button style={styles.btnPrimary} onClick={saveRename}>
+              Save Changes
+            </button>
           </>
         }
       >
         {edit && (
-          <div style={{ display: "grid", gap: 10 }}>
-            <label style={{ fontSize: 12, color: "#6b7280" }}>Current name</label>
-            <input style={{ ...input }} value={edit.current} disabled />
-
-            <label style={{ fontSize: 12, color: "#6b7280", marginTop: 6 }}>New name</label>
-            <input
-              autoFocus
-              style={{ ...input }}
-              value={edit.newName}
-              onChange={(e) => setEdit((x) => ({ ...x, newName: e.target.value }))}
-              onKeyDown={(e) => e.key === "Enter" && saveRename()}
-              placeholder="e.g. North Region"
-            />
+          <div style={{ display: "grid", gap: 16 }}>
+            <div>
+              <label style={{ display: "block", marginBottom: 8, fontWeight: 600, fontSize: 13, color: "#64748b" }}>
+                Current Name
+              </label>
+              <input style={{ ...styles.input, background: "#f8fafc" }} value={edit.current} disabled />
+            </div>
+            <div>
+              <label style={{ display: "block", marginBottom: 8, fontWeight: 600, fontSize: 13, color: "#374151" }}>
+                New Name
+              </label>
+              <input
+                autoFocus
+                style={styles.input}
+                value={edit.newName}
+                onChange={(e) => setEdit((x) => ({ ...x, newName: e.target.value }))}
+                onKeyDown={(e) => e.key === "Enter" && saveRename()}
+                placeholder="e.g. North Region"
+              />
+            </div>
           </div>
         )}
       </Modal>
     </div>
   );
 }
-
