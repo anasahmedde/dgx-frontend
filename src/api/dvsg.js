@@ -1,6 +1,8 @@
 import { httpFactory } from "./httpFactory";
 import { API } from "./config";
 import { enc } from "./paginate";
+import { safeGet } from "./httpFactory";
+
 
 const http = httpFactory({ baseURL: API.DVSG });
 
@@ -21,3 +23,6 @@ export async function listGroupVideoNames(groupName) {
 export const setGroupVideosByNames = (groupName, videoNames = []) =>
   http.post(`/group/${enc(groupName)}/videos`, { video_names: videoNames });
 
+export async function getDeviceTemperatureSeries(mobileId, days = 30, bucket = "day") {
+  return safeGet(`/device/${encodeURIComponent(mobileId)}/temperature_series`, { days, bucket });
+}
