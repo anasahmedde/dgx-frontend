@@ -1,6 +1,7 @@
 // src/components/Device.js
-// Device Management with server-side pagination (minimal: Prev/Next + page size)
-import React, { useEffect, useMemo, useState } from "react";
+// Device Management with server-side pagination and temperature line graph reports
+// Updated with Report button for each device listing
+import React, { useEffect, useMemo, useState, useCallback } from "react";
 import { listDevices, insertDevice, deleteDevice } from "../api/device";
 import { listGroupNames } from "../api/group";
 import { listShopNames } from "../api/shop";
@@ -17,7 +18,264 @@ const dvsgApi = axios.create({
   headers: { "Content-Type": "application/json" },
 });
 
-function Modal({ open, title, onClose, children, footer }) {
+// ===== Temperature Line Graph Component =====
+function TemperatureLineGraph({ data, timeRange, title, onDownload }) {
+  const chartHeight = 320;
+  const chartWidth = 750;
+  const padding = { top: 30, right: 40, bottom: 60, left: 70 };
+
+  const innerWidth = chartWidth - padding.left - padding.right;
+  const innerHeight = chartHeight - padding.top - padding.bottom;
+
+  // Process data
+  const processedData = useMemo(() => {
+    if (!data || data.length === 0) return [];
+
+    return data
+      .filter((d) => d.log_type === "temperature" && d.value != null)
+      .map((d) => ({
+        time: new Date(d.logged_at),
+        value: parseFloat(d.value),
+      }))
+      .sort((a, b) => a.time - b.time);
+  }, [data]);
+
+  if (processedData.length === 0) {
+    return (
+      <div
+        style={{
+          height: chartHeight,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          background: "#f8fafc",
+          borderRadius: 8,
+          color: "#6b7280",
+        }}
+      >
+        No temperature data available for the selected period
+      </div>
+    );
+  }
+
+  // Calculate scales
+  const minTemp = Math.floor(Math.min(...processedData.map((d) => d.value)) - 2);
+  const maxTemp = Math.ceil(Math.max(...processedData.map((d) => d.value)) + 2);
+  const minTime = processedData[0].time.getTime();
+  const maxTime = processedData[processedData.length - 1].time.getTime();
+  const timeSpan = maxTime - minTime || 1;
+  const tempSpan = maxTemp - minTemp || 1;
+
+  // Generate line path
+  const linePath = processedData
+    .map((d, i) => {
+      const x = padding.left + ((d.time.getTime() - minTime) / timeSpan) * innerWidth;
+      const y = padding.top + innerHeight - ((d.value - minTemp) / tempSpan) * innerHeight;
+      return `${i === 0 ? "M" : "L"} ${x} ${y}`;
+    })
+    .join(" ");
+
+  // Generate area path for gradient fill
+  const firstX = padding.left + ((processedData[0].time.getTime() - minTime) / timeSpan) * innerWidth;
+  const lastX = padding.left + ((processedData[processedData.length - 1].time.getTime() - minTime) / timeSpan) * innerWidth;
+  const bottomY = padding.top + innerHeight;
+  const areaPath = `${linePath} L ${lastX} ${bottomY} L ${firstX} ${bottomY} Z`;
+
+  // Y-axis ticks
+  const yTicks = [];
+  const yStep = tempSpan <= 10 ? 1 : Math.ceil(tempSpan / 6);
+  for (let t = minTemp; t <= maxTemp; t += yStep) {
+    const y = padding.top + innerHeight - ((t - minTemp) / tempSpan) * innerHeight;
+    yTicks.push({ value: t, y });
+  }
+
+  // X-axis ticks
+  const xTicks = [];
+  const numXTicks = 6;
+  for (let i = 0; i <= numXTicks; i++) {
+    const time = new Date(minTime + (timeSpan * i) / numXTicks);
+    const x = padding.left + (innerWidth * i) / numXTicks;
+    xTicks.push({ time, x });
+  }
+
+  // Format time based on time range
+  const formatTime = (date) => {
+    if (timeRange === "1h" || timeRange === "6h" || timeRange === "24h") {
+      return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    }
+    return date.toLocaleDateString([], { month: "short", day: "numeric" });
+  };
+
+  // Statistics
+  const avgTemp = processedData.reduce((sum, d) => sum + d.value, 0) / processedData.length;
+  const minTempVal = Math.min(...processedData.map((d) => d.value));
+  const maxTempVal = Math.max(...processedData.map((d) => d.value));
+  const currentTemp = processedData[processedData.length - 1].value;
+
+  return (
+    <div>
+      {/* Title */}
+      {title && (
+        <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 12, color: "#1f2937" }}>{title}</div>
+      )}
+
+      {/* Stats Cards */}
+      <div style={{ display: "flex", gap: 12, marginBottom: 16, flexWrap: "wrap" }}>
+        <div style={{ padding: "10px 16px", background: "#dbeafe", borderRadius: 8, minWidth: 90 }}>
+          <div style={{ fontSize: 11, color: "#1e40af", fontWeight: 600 }}>Current</div>
+          <div style={{ fontSize: 20, fontWeight: 700, color: "#1e40af" }}>{currentTemp.toFixed(1)}°C</div>
+        </div>
+        <div style={{ padding: "10px 16px", background: "#dcfce7", borderRadius: 8, minWidth: 90 }}>
+          <div style={{ fontSize: 11, color: "#166534", fontWeight: 600 }}>Average</div>
+          <div style={{ fontSize: 20, fontWeight: 700, color: "#166534" }}>{avgTemp.toFixed(1)}°C</div>
+        </div>
+        <div style={{ padding: "10px 16px", background: "#fef3c7", borderRadius: 8, minWidth: 90 }}>
+          <div style={{ fontSize: 11, color: "#92400e", fontWeight: 600 }}>Min</div>
+          <div style={{ fontSize: 20, fontWeight: 700, color: "#92400e" }}>{minTempVal.toFixed(1)}°C</div>
+        </div>
+        <div style={{ padding: "10px 16px", background: "#fee2e2", borderRadius: 8, minWidth: 90 }}>
+          <div style={{ fontSize: 11, color: "#991b1b", fontWeight: 600 }}>Max</div>
+          <div style={{ fontSize: 20, fontWeight: 700, color: "#991b1b" }}>{maxTempVal.toFixed(1)}°C</div>
+        </div>
+        <div style={{ padding: "10px 16px", background: "#f3e8ff", borderRadius: 8, minWidth: 90 }}>
+          <div style={{ fontSize: 11, color: "#7c3aed", fontWeight: 600 }}>Points</div>
+          <div style={{ fontSize: 20, fontWeight: 700, color: "#7c3aed" }}>{processedData.length}</div>
+        </div>
+      </div>
+
+      {/* SVG Line Chart */}
+      <svg
+        width={chartWidth}
+        height={chartHeight}
+        style={{ background: "#fafafa", borderRadius: 8, maxWidth: "100%", display: "block" }}
+      >
+        {/* Gradient definition */}
+        <defs>
+          <linearGradient id="tempGradientLine" x1="0" x2="0" y1="0" y2="1">
+            <stop offset="0%" stopColor="#3b82f6" stopOpacity="0.4" />
+            <stop offset="100%" stopColor="#3b82f6" stopOpacity="0.05" />
+          </linearGradient>
+        </defs>
+
+        {/* Grid lines */}
+        {yTicks.map((tick, i) => (
+          <line
+            key={`grid-y-${i}`}
+            x1={padding.left}
+            x2={chartWidth - padding.right}
+            y1={tick.y}
+            y2={tick.y}
+            stroke="#e5e7eb"
+            strokeDasharray="4,4"
+          />
+        ))}
+
+        {/* Area fill */}
+        <path d={areaPath} fill="url(#tempGradientLine)" />
+
+        {/* Line */}
+        <path d={linePath} fill="none" stroke="#3b82f6" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" />
+
+        {/* Data points (only show if not too many) */}
+        {processedData.length <= 50 &&
+          processedData.map((d, i) => {
+            const x = padding.left + ((d.time.getTime() - minTime) / timeSpan) * innerWidth;
+            const y = padding.top + innerHeight - ((d.value - minTemp) / tempSpan) * innerHeight;
+            return <circle key={i} cx={x} cy={y} r={3} fill="#3b82f6" stroke="#fff" strokeWidth={1.5} />;
+          })}
+
+        {/* Y-axis */}
+        <line x1={padding.left} x2={padding.left} y1={padding.top} y2={padding.top + innerHeight} stroke="#9ca3af" />
+        {yTicks.map((tick, i) => (
+          <g key={`y-tick-${i}`}>
+            <line x1={padding.left - 5} x2={padding.left} y1={tick.y} y2={tick.y} stroke="#9ca3af" />
+            <text x={padding.left - 10} y={tick.y + 4} textAnchor="end" fontSize={11} fill="#6b7280">
+              {tick.value}°C
+            </text>
+          </g>
+        ))}
+
+        {/* X-axis */}
+        <line
+          x1={padding.left}
+          x2={chartWidth - padding.right}
+          y1={padding.top + innerHeight}
+          y2={padding.top + innerHeight}
+          stroke="#9ca3af"
+        />
+        {xTicks.map((tick, i) => (
+          <g key={`x-tick-${i}`}>
+            <line x1={tick.x} x2={tick.x} y1={padding.top + innerHeight} y2={padding.top + innerHeight + 5} stroke="#9ca3af" />
+            <text
+              x={tick.x}
+              y={padding.top + innerHeight + 20}
+              textAnchor="middle"
+              fontSize={10}
+              fill="#6b7280"
+              transform={`rotate(-30, ${tick.x}, ${padding.top + innerHeight + 20})`}
+            >
+              {formatTime(tick.time)}
+            </text>
+          </g>
+        ))}
+
+        {/* Axis Labels */}
+        <text 
+          x={padding.left / 2} 
+          y={chartHeight / 2} 
+          textAnchor="middle" 
+          fontSize={12} 
+          fill="#374151" 
+          transform={`rotate(-90, ${padding.left / 2}, ${chartHeight / 2})`}
+        >
+          Temperature (°C)
+        </text>
+        <text x={chartWidth / 2} y={chartHeight - 5} textAnchor="middle" fontSize={12} fill="#374151">
+          Time
+        </text>
+      </svg>
+
+      {/* Download Buttons */}
+      {onDownload && (
+        <div style={{ marginTop: 16, display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <button
+            style={{
+              padding: "8px 16px",
+              borderRadius: 8,
+              border: "1px solid #3b82f6",
+              background: "#3b82f6",
+              color: "#fff",
+              cursor: "pointer",
+              fontWeight: 600,
+              fontSize: 13,
+            }}
+            onClick={() => onDownload("absolute")}
+          >
+            📥 Download CSV (Absolute Values)
+          </button>
+          <button
+            style={{
+              padding: "8px 16px",
+              borderRadius: 8,
+              border: "1px solid #8b5cf6",
+              background: "#8b5cf6",
+              color: "#fff",
+              cursor: "pointer",
+              fontWeight: 600,
+              fontSize: 13,
+            }}
+            onClick={() => onDownload("relative")}
+          >
+            📥 Download CSV (Relative to Average)
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ===== Modal Component =====
+function Modal({ open, title, onClose, children, footer, width = "980px" }) {
   useEffect(() => {
     if (!open) return;
     const onKey = (e) => e.key === "Escape" && onClose();
@@ -36,11 +294,14 @@ function Modal({ open, title, onClose, children, footer }) {
   };
 
   const card = {
-    width: "min(92vw, 980px)",
+    width: `min(92vw, ${width})`,
     background: "#fff",
     borderRadius: 14,
     boxShadow: "0 20px 60px rgba(0,0,0,.25)",
     overflow: "hidden",
+    maxHeight: "90vh",
+    display: "flex",
+    flexDirection: "column",
   };
 
   const header = {
@@ -50,6 +311,7 @@ function Modal({ open, title, onClose, children, footer }) {
     padding: "12px 14px",
     color: "white",
     background: "linear-gradient(90deg, #5b7cfa, #7c4bc9)",
+    flexShrink: 0,
   };
 
   const closeBtn = {
@@ -73,17 +335,14 @@ function Modal({ open, title, onClose, children, footer }) {
             ×
           </button>
         </div>
-
-        <div style={{ padding: 14 }}>{children}</div>
-
-        {footer ? (
-          <div style={{ padding: 14, borderTop: "1px solid #e5e7eb" }}>{footer}</div>
-        ) : null}
+        <div style={{ padding: 14, overflowY: "auto", flex: 1 }}>{children}</div>
+        {footer ? <div style={{ padding: 14, borderTop: "1px solid #e5e7eb", flexShrink: 0 }}>{footer}</div> : null}
       </div>
     </div>
   );
 }
 
+// ===== Helper Functions =====
 function fmtDate(v) {
   if (!v) return "";
   const d = new Date(v);
@@ -104,6 +363,84 @@ function prettyErrText(s) {
   }
 }
 
+// ===== Styles =====
+const inputStyle = {
+  width: "100%",
+  padding: "10px 12px",
+  borderRadius: 10,
+  border: "1px solid #e5e7eb",
+  outline: "none",
+  fontSize: 14,
+};
+
+const btn = {
+  padding: "10px 14px",
+  borderRadius: 10,
+  border: "none",
+  cursor: "pointer",
+  fontWeight: 700,
+  background: "#6d5efc",
+  color: "white",
+  boxShadow: "0 10px 24px rgba(109,94,252,.25)",
+};
+
+const btnGhost = {
+  padding: "10px 14px",
+  borderRadius: 10,
+  border: "1px solid #e5e7eb",
+  cursor: "pointer",
+  fontWeight: 700,
+  background: "white",
+};
+
+const btnSuccess = {
+  padding: "10px 14px",
+  borderRadius: 10,
+  border: "none",
+  cursor: "pointer",
+  fontWeight: 700,
+  background: "#10b981",
+  color: "white",
+};
+
+const btnDanger = {
+  padding: "6px 10px",
+  borderRadius: 8,
+  border: "none",
+  cursor: "pointer",
+  fontWeight: 700,
+  background: "#ef4444",
+  color: "white",
+  fontSize: 12,
+};
+
+const btnTiny = {
+  padding: "8px 10px",
+  borderRadius: 10,
+  border: "1px solid #e5e7eb",
+  cursor: "pointer",
+  fontWeight: 800,
+  background: "white",
+};
+
+const btnTinyDisabled = {
+  ...btnTiny,
+  opacity: 0.45,
+  cursor: "not-allowed",
+};
+
+const btnReport = {
+  padding: "6px 10px",
+  borderRadius: 8,
+  border: "1px solid #8b5cf6",
+  background: "#f5f3ff",
+  color: "#7c3aed",
+  cursor: "pointer",
+  fontWeight: 600,
+  fontSize: 11,
+};
+
+// ===== Main Component =====
 export default function Device() {
   const [open, setOpen] = useState(false);
 
@@ -141,7 +478,7 @@ export default function Device() {
 
   // Two-step add modal
   const [addOpen, setAddOpen] = useState(false);
-  const [step, setStep] = useState(1); // Step 1: Mobile ID, Step 2: Group & Shop
+  const [step, setStep] = useState(1);
 
   // Form data
   const [mobileId, setMobileId] = useState("");
@@ -156,75 +493,18 @@ export default function Device() {
   const [adding, setAdding] = useState(false);
   const [success, setSuccess] = useState("");
 
+  // Line Graph Report Modal State
+  const [reportOpen, setReportOpen] = useState(false);
+  const [reportDevice, setReportDevice] = useState(null);
+  const [reportData, setReportData] = useState([]);
+  const [reportLoading, setReportLoading] = useState(false);
+  const [reportTimeRange, setReportTimeRange] = useState("24h");
+
   const canProceedToStep2 = useMemo(() => (mobileId ?? "").trim().length > 0, [mobileId]);
   const canSubmit = useMemo(() => mobileId.trim() && group && shop, [mobileId, group, shop]);
 
-  const inputStyle = {
-    width: "100%",
-    padding: "10px 12px",
-    borderRadius: 10,
-    border: "1px solid #e5e7eb",
-    outline: "none",
-    fontSize: 14,
-  };
-
-  const btn = {
-    padding: "10px 14px",
-    borderRadius: 10,
-    border: "none",
-    cursor: "pointer",
-    fontWeight: 700,
-    background: "#6d5efc",
-    color: "white",
-    boxShadow: "0 10px 24px rgba(109,94,252,.25)",
-  };
-
-  const btnGhost = {
-    padding: "10px 14px",
-    borderRadius: 10,
-    border: "1px solid #e5e7eb",
-    cursor: "pointer",
-    fontWeight: 700,
-    background: "white",
-  };
-
-  const btnSuccess = {
-    padding: "10px 14px",
-    borderRadius: 10,
-    border: "none",
-    cursor: "pointer",
-    fontWeight: 700,
-    background: "#10b981",
-    color: "white",
-  };
-
-  const btnDanger = {
-    padding: "8px 12px",
-    borderRadius: 10,
-    border: "none",
-    cursor: "pointer",
-    fontWeight: 800,
-    background: "#ef4444",
-    color: "white",
-  };
-
-  const btnTiny = {
-    padding: "8px 10px",
-    borderRadius: 10,
-    border: "1px solid #e5e7eb",
-    cursor: "pointer",
-    fontWeight: 800,
-    background: "white",
-  };
-
-  const btnTinyDisabled = {
-    ...btnTiny,
-    opacity: 0.45,
-    cursor: "not-allowed",
-  };
-
   // Load groups and shops for step 2
-  const loadLists = async () => {
+  const loadLists = useCallback(async () => {
     setLoadingLists(true);
     setErrText("");
     try {
@@ -239,14 +519,14 @@ export default function Device() {
     } finally {
       setLoadingLists(false);
     }
-  };
+  }, [group, shop]);
 
   useEffect(() => {
     if (addOpen && step === 2) loadLists();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [addOpen, step]);
+  }, [addOpen, step, loadLists]);
 
-  const loadPage = async (p = page, ps = pageSize, qx = qApplied) => {
+  // Load page data
+  const loadPage = useCallback(async (p = 1, ps = 10, qx = "") => {
     setLoading(true);
     setErrText("");
     setFkDetail(null);
@@ -278,20 +558,127 @@ export default function Device() {
     setItems(r.items || []);
     setTotal(newTotal);
     setLoading(false);
-  };
+  }, []);
+
+  // Load temperature report data
+  const loadReportData = useCallback(async (mobileIdVal, timeRangeVal) => {
+    setReportLoading(true);
+    try {
+      // Calculate date range
+      const now = new Date();
+      let startDate;
+      switch (timeRangeVal) {
+        case "1h":
+          startDate = new Date(now.getTime() - 60 * 60 * 1000);
+          break;
+        case "6h":
+          startDate = new Date(now.getTime() - 6 * 60 * 60 * 1000);
+          break;
+        case "24h":
+          startDate = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+          break;
+        case "7d":
+          startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+          break;
+        case "30d":
+          startDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+          break;
+        default:
+          startDate = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+      }
+
+      const res = await dvsgApi.get(`/device/${mobileIdVal}/logs`, {
+        params: {
+          log_type: "temperature",
+          start_date: startDate.toISOString().split("T")[0],
+          end_date: now.toISOString().split("T")[0],
+          limit: 5000,
+        },
+      });
+      setReportData(res.data?.items || []);
+    } catch (e) {
+      console.error("Failed to load report data", e);
+      setReportData([]);
+    } finally {
+      setReportLoading(false);
+    }
+  }, []);
+
+  // Download report as CSV
+  const downloadReport = useCallback(
+    (mode) => {
+      if (!reportData || reportData.length === 0) return;
+
+      const tempData = reportData
+        .filter((d) => d.log_type === "temperature" && d.value != null)
+        .map((d) => ({
+          time: new Date(d.logged_at),
+          value: parseFloat(d.value),
+        }))
+        .sort((a, b) => a.time - b.time);
+
+      if (tempData.length === 0) return;
+
+      let csvContent = "";
+      const avgTemp = tempData.reduce((sum, d) => sum + d.value, 0) / tempData.length;
+
+      if (mode === "absolute") {
+        csvContent = "Timestamp,Temperature (°C)\n";
+        tempData.forEach((d) => {
+          csvContent += `${d.time.toISOString()},${d.value.toFixed(2)}\n`;
+        });
+      } else {
+        // Relative to average
+        csvContent = "Timestamp,Temperature (°C),Deviation from Avg (°C),Deviation (%)\n";
+        tempData.forEach((d) => {
+          const deviation = d.value - avgTemp;
+          const deviationPct = ((deviation / avgTemp) * 100).toFixed(2);
+          csvContent += `${d.time.toISOString()},${d.value.toFixed(2)},${deviation.toFixed(2)},${deviationPct}\n`;
+        });
+      }
+
+      // Download
+      const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = `temperature_report_${reportDevice}_${reportTimeRange}_${mode}.csv`;
+      link.click();
+    },
+    [reportData, reportDevice, reportTimeRange]
+  );
+
+  // Open report modal
+  const openReport = useCallback(
+    (device) => {
+      setReportDevice(device.mobile_id);
+      setReportTimeRange("24h");
+      setReportOpen(true);
+      loadReportData(device.mobile_id, "24h");
+    },
+    [loadReportData]
+  );
+
+  // Change time range
+  const changeTimeRange = useCallback(
+    (range) => {
+      setReportTimeRange(range);
+      if (reportDevice) {
+        loadReportData(reportDevice, range);
+      }
+    },
+    [reportDevice, loadReportData]
+  );
 
   // initial load + reload when page/pageSize changes (only when modal open)
   useEffect(() => {
     if (!open) return;
     loadPage(page, pageSize, qApplied);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, page, pageSize]);
+  }, [open, page, pageSize, qApplied, loadPage]);
 
   const onSearch = async () => {
     const nextQ = (q || "").trim();
     setQApplied(nextQ);
     setPage(1);
-    // load will happen via effect (open/page change). But run once immediately for snappy UI:
     if (open) await loadPage(1, pageSize, nextQ);
   };
 
@@ -312,7 +699,6 @@ export default function Device() {
 
     const r = await deleteDevice(mid);
     if (r.ok) {
-      // reload current page; if it becomes empty, go back one page
       const offset = (page - 1) * pageSize;
       const rr = await listDevices(pageSize, offset, qApplied);
       if (rr.ok) {
@@ -493,7 +879,6 @@ export default function Device() {
         style={btn}
         onClick={() => {
           setOpen(true);
-          // reset to first page when opening (optional but nice)
           setPage(1);
         }}
       >
@@ -589,8 +974,8 @@ export default function Device() {
                 <th style={{ padding: 12, fontSize: 12, color: "#6b7280" }}>Downloaded</th>
                 <th style={{ padding: 12, fontSize: 12, color: "#6b7280" }}>Created</th>
                 <th style={{ padding: 12, fontSize: 12, color: "#6b7280" }}>Updated</th>
-                <th style={{ padding: 12, fontSize: 12, color: "#6b7280", width: 120, textAlign: "right" }}>
-                  Action
+                <th style={{ padding: 12, fontSize: 12, color: "#6b7280", width: 180, textAlign: "right" }}>
+                  Actions
                 </th>
               </tr>
             </thead>
@@ -616,9 +1001,14 @@ export default function Device() {
                     <td style={{ padding: 12 }}>{fmtDate(d.created_at)}</td>
                     <td style={{ padding: 12 }}>{fmtDate(d.updated_at)}</td>
                     <td style={{ padding: 12, textAlign: "right" }}>
-                      <button style={btnDanger} onClick={() => onDelete(d)}>
-                        Delete
-                      </button>
+                      <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                        <button style={btnReport} onClick={() => openReport(d)} title="View Temperature Report">
+                          📈 Report
+                        </button>
+                        <button style={btnDanger} onClick={() => onDelete(d)}>
+                          Delete
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))
@@ -634,6 +1024,7 @@ export default function Device() {
           open={addOpen}
           title={step === 1 ? "Add Device - Step 1: Enter Mobile ID" : "Add Device - Step 2: Link to Group & Shop"}
           onClose={() => setAddOpen(false)}
+          width="600px"
           footer={
             step === 1 ? (
               <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
@@ -784,8 +1175,56 @@ export default function Device() {
             </div>
           )}
         </Modal>
+
+        {/* Temperature Report Modal */}
+        <Modal
+          open={reportOpen}
+          title={`📈 Temperature Report: ${reportDevice}`}
+          onClose={() => setReportOpen(false)}
+          width="900px"
+          footer={
+            <button style={btnGhost} onClick={() => setReportOpen(false)}>
+              Close
+            </button>
+          }
+        >
+          {/* Time Range Selector */}
+          <div style={{ marginBottom: 16, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            <div style={{ fontSize: 13, fontWeight: 700, marginRight: 8 }}>Time Range:</div>
+            {[
+              { value: "1h", label: "1 Hour" },
+              { value: "6h", label: "6 Hours" },
+              { value: "24h", label: "24 Hours" },
+              { value: "7d", label: "7 Days" },
+              { value: "30d", label: "30 Days" },
+            ].map((opt) => (
+              <button
+                key={opt.value}
+                style={{
+                  ...btnTiny,
+                  background: reportTimeRange === opt.value ? "#4f46e5" : "#fff",
+                  color: reportTimeRange === opt.value ? "#fff" : "#374151",
+                  borderColor: reportTimeRange === opt.value ? "#4f46e5" : "#e5e7eb",
+                }}
+                onClick={() => changeTimeRange(opt.value)}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+
+          {reportLoading ? (
+            <div style={{ padding: 40, textAlign: "center", color: "#6b7280" }}>Loading temperature data...</div>
+          ) : (
+            <TemperatureLineGraph
+              data={reportData}
+              timeRange={reportTimeRange}
+              title={`Temperature History (${reportTimeRange})`}
+              onDownload={downloadReport}
+            />
+          )}
+        </Modal>
       </Modal>
     </div>
   );
 }
-
